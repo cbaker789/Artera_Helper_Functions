@@ -124,6 +124,48 @@ def _to_yyyymmdd(series: pd.Series) -> pd.Series:
     return dt.dt.strftime("%Y%m%d")
 
 
+# ========================================
+# Language normalization helpers
+# ========================================
+def _normalize_lang_key(s: str) -> str:
+    """
+    Normalize a language string for key comparison:
+    - lowercase
+    - remove non-letters to single spaces
+    - collapse spaces
+    """
+    if s is None:
+        return ""
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z]+", " ", str(s).strip().lower())).strip()
+
+
+def _recode_language_series(series: pd.Series, recode_map: Optional[Dict[str, str]] = None) -> pd.Series:
+    """
+    Recode language values using a normalization step so variants like
+    'Spanish; Castilian' and 'Spanish; Castillian' both map to 'Spanish'.
+    If recode_map is provided, its keys are normalized before matching.
+    """
+    # Base canonicalizations you always want:
+    base_map = {
+        "spanish castilian": "Spanish",
+        "spanish castillian": "Spanish",
+    }
+    norm_map: Dict[str, str] = dict(base_map)
+
+    if recode_map:
+        for k, v in recode_map.items():
+            norm_map[_normalize_lang_key(k)] = v
+
+    s = series.astype("string")
+    norm_keys = s.fillna("").map(_normalize_lang_key)
+
+    # Where a normalized key matches, replace with target; otherwise keep original
+    mapped = norm_keys.map(norm_map)
+    # Use original where no mapping exists
+    out = s.where(mapped.isna(), mapped)
+    return out
+
+
 # ==================================================
 # Core normalizer: DataFrame -> Artera schema DF
 # ==================================================
@@ -174,9 +216,9 @@ def build_artera_upload_from_df(
     gender_col = column_map.get("gender")
     mid_col = column_map.get("middle_name")
 
-    # Optional language recode
-    if language_recode and lang_col and lang_col in work.columns:
-        work[lang_col] = work[lang_col].replace(language_recode)
+    # Optional language recode (robust, handles punctuation/case/typos like "Castillian")
+    if lang_col and lang_col in work.columns:
+        work[lang_col] = _recode_language_series(work[lang_col], language_recode)
 
     # Build upload frame
     upload = pd.DataFrame({
@@ -300,8 +342,11 @@ if __name__ == "__main__":
         outdir = input("📁 Output directory for CSV (default='.') : ").strip() or "."
         prefix = input("🏷️  File prefix (default='SBNC_Outreach') : ").strip() or "SBNC_Outreach"
 
-        # Optional language recode to standardize common variants
-        language_recode = {"Spanish; Castilian": "Spanish"}
+        # Optional language recode to standardize common variants (helpers also handle variants)
+        language_recode = {
+            "Spanish; Castilian": "Spanish",
+            "Spanish; Castillian": "Spanish",
+        }
 
         result = build_artera_upload_from_excel(
             xlsx_path=xlsx_path,
