@@ -7,19 +7,17 @@ from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 
-
 # ============================
 # Column alias dictionaries
 # ============================
 
-# Canonical keys -> common header variants (case-insensitive)
 COLUMN_ALIASES: Dict[str, List[str]] = {
-    "full_name": ["name", "patient name", "member name", "full name"],
+    "full_name": ["Name","name", "patient name", "member name", "full name"],
     "first_name": ["first name", "given name", "patient first name", "first_name"],
     "last_name": ["last name", "surname", "family name", "patient last name","last_name"],
-    "dob": ["dob", "date of birth", "birthdate", "birth date"],
+    "dob": ["dob", "date of birth", "birthdate", "birth date", "Date_of_birth"],
     "mrn": ["mrn", "person id", "patient id", "medical record number", "chart number", "member id"],
-    "gender": ["sex at birth", "gender", "birth sex", "assigned sex at birth", "biological sex"],
+    "gender": ["Sex","sex at birth", "gender", "birth sex", "assigned sex at birth", "biological sex"],
     "phone": ["phone", "cell", "cell phone", "mobile", "mobile phone", "primary phone", "person phone"],
     "email": ["email", "email address", "person email", "patient email"],
     "language": ["language", "preferred language", "person language", "primary language"],
@@ -29,14 +27,12 @@ COLUMN_ALIASES: Dict[str, List[str]] = {
     "middle_name": ["middle name", "mid name", "middle initial"],
 }
 
-
 # ============================
 # Utilities
 # ============================
 
 def _norm(s: str) -> str:
     return re.sub(r"\s+", " ", str(s).strip().lower())
-
 
 def _best_match_column(df: pd.DataFrame, candidates: List[str]) -> Optional[str]:
     """
@@ -64,29 +60,10 @@ def _best_match_column(df: pd.DataFrame, candidates: List[str]) -> Optional[str]
 
     return None
 
-
 def infer_column_map(
     df: pd.DataFrame,
     extra_aliases: Optional[Dict[str, List[str]]] = None
 ) -> Dict[str, Optional[str]]:
-    """
-    Infer likely column names from a DataFrame and return a mapping:
-      {
-        "first_name": "...",
-        "last_name":  "...",
-        "full_name":  "...",
-        "dob":        "...",
-        "mrn":        "...",
-        "gender":     "...",
-        "phone":      "...",
-        "home_phone": "...",
-        "work_phone": "...",
-        "email":      "...",
-        "language":   "...",
-        "middle_name":"..."
-      }
-    Any missing entries are set to None.
-    """
     alias = COLUMN_ALIASES.copy()
     if extra_aliases:
         for k, v in extra_aliases.items():
@@ -96,7 +73,6 @@ def infer_column_map(
     for key, cand in alias.items():
         mapping[key] = _best_match_column(df, cand)
     return mapping
-
 
 def _split_full_name(series: pd.Series) -> Tuple[pd.Series, pd.Series]:
     """
@@ -111,18 +87,15 @@ def _split_full_name(series: pd.Series) -> Tuple[pd.Series, pd.Series]:
         last = parts[0].fillna("")
         first = parts[1].fillna("")
     else:
-        # Fallback: split on spaces; last token is last name
         toks = s.str.split(r"\s+")
         first = toks.str[:-1].str.join(" ").fillna("")
         last = toks.str[-1].fillna("")
     return first, last
 
-
 def _to_yyyymmdd(series: pd.Series) -> pd.Series:
     """Coerce date-like strings to YYYYMMDD (string). Invalid -> <NA>."""
     dt = pd.to_datetime(series, errors="coerce")
     return dt.dt.strftime("%Y%m%d")
-
 
 # ==================================================
 # Core normalizer: DataFrame -> Artera schema DF
@@ -178,7 +151,6 @@ def build_artera_upload_from_df(
     if language_recode and lang_col and lang_col in work.columns:
         work[lang_col] = work[lang_col].replace(language_recode)
 
-    # Build upload frame
     upload = pd.DataFrame({
         "personLastName": work[last_col],
         "personMidName": work[mid_col] if mid_col and mid_col in work.columns else pd.NA,
@@ -195,7 +167,6 @@ def build_artera_upload_from_df(
 
     return upload
 
-
 # =========================================================
 # Excel crawler: Excel path -> infer -> normalize -> CSV
 # =========================================================
@@ -207,7 +178,7 @@ def build_artera_upload_from_excel(
     extra_aliases: Optional[Dict[str, List[str]]] = None,
     language_recode: Optional[Dict[str, str]] = None,
     csv_outdir: str | Path = ".",
-    file_prefix: str = "SBNC_Outreach",
+    file_prefix: str = "SBNC_Outreach_",
     today: Optional[datetime] = None,
 ) -> Dict[str, object]:
     """
@@ -274,33 +245,234 @@ def build_artera_upload_from_excel(
         "csv_path": str(csv_path),
     }
 
+# ============================
+# File picking & path resolve
+# ============================
 
-# ===========================================
-# Convenience wrapper (DF -> upload schema)
-# ===========================================
+import tkinter as tk
+from tkinter import filedialog
 
-def build_artera_upload(df: pd.DataFrame) -> pd.DataFrame:
-    """Thin wrapper: infer a map and return the Artera upload DataFrame."""
-    cmap = infer_column_map(df)
-    # Example recode to keep parity with past usage:
-    return build_artera_upload_from_df(df, column_map=cmap, language_recode={"Spanish; Castilian": "Spanish"})
+def pick_excel_path() -> str:
+    try:
+        root = tk.Tk()
+        root.withdraw()
+        path = filedialog.askopenfilename(
+            title="Select Excel file",
+            filetypes=[("Excel files", "*.xlsx *.xlsm *.xlsb *.xls"), ("All files", "*.*")]
+        )
+        return path or ""
+    except Exception:
+        return ""
 
+def _resolve_xlsx_path(user_input: str) -> Path:
+    """
+    Resolve a user-entered Excel path robustly:
+      - trims/strips quotes and whitespace
+      - preserves provided extension; if none, appends .xlsx
+      - expands ~
+      - fixes malformed 'C:\\Users\\Desktop\\...' by rewriting to HOME\\Desktop\\...
+      - collapses duplicated '\\Users\\<you>\\Users\\<you>\\...' segments
+      - if relative like 'Desktop\\file', resolves against HOME/Desktop
+      - tries common OneDrive Desktop locations
+      - deduplicates candidates and returns the first existing
+    Raises FileNotFoundError listing all tried paths on failure.
+    """
+    raw = (user_input or "").strip().strip('"').strip("'")
+    if not raw:
+        raise FileNotFoundError("No path provided.")
+
+    home = Path.home()
+    me = home.name
+
+    # Fix missing backslash after drive letter like 'C:users\...'
+    raw = re.sub(r"^([A-Za-z]):(?!\\)", r"\\1:\\", raw)
+
+    # Fix malformed 'C:\\Users\\Desktop\\...' (missing username)
+    if re.match(r"^[A-Za-z]:\\Users\\Desktop(\\|$)", raw, flags=re.IGNORECASE):
+        tail = raw.split("\\Users\\Desktop\\", 1)[1] if "\\Users\\Desktop\\" in raw else ""
+        raw = str(home / "Desktop" / tail)
+
+    # Collapse duplicated '\Users\<me>\Users\<me>\'
+    dup_pat = re.compile(rf"(\\Users\\{re.escape(me)})(?:\\Users\\{re.escape(me)})+(\\|$)", flags=re.IGNORECASE)
+    raw = dup_pat.sub(rf"\1\2", raw)
+
+    p_in = Path(raw)
+
+    # Ensure an Excel extension if none was given
+    if p_in.suffix == "":
+        p_in = p_in.with_suffix(".xlsx")
+
+    name = p_in.name
+
+    candidates: List[Path] = []
+
+    # 1) As given (absolute or relative to CWD)
+    candidates.append(p_in)
+
+    # 2) Expand ~
+    candidates.append(Path(raw).expanduser())
+
+    # 3) If relative, try relative to HOME
+    if not p_in.is_absolute():
+        candidates.append(home / p_in)
+
+    # 4) Handle inputs starting with 'Desktop\...'
+    parts = Path(raw).parts
+    if parts and parts[0].lower() == "desktop":
+        after_desktop = Path(*parts[1:]) if len(parts) > 1 else Path(name)
+        if after_desktop.suffix == "":
+            after_desktop = after_desktop.with_suffix(".xlsx")
+        candidates.append(home / "Desktop" / after_desktop)
+
+    # 5) Try common OneDrive Desktop paths
+    for od in home.glob("OneDrive*/Desktop"):
+        # If input was absolute, prefer its basename under OneDrive Desktop
+        candidates.append(od / name)
+        if parts and parts[0].lower() == "desktop":
+            candidates.append(od / after_desktop)
+
+    # Deduplicate while preserving order
+    seen = set()
+    uniq: List[Path] = []
+    for c in candidates:
+        try:
+            key = str(c.resolve(strict=False)).lower()
+        except Exception:
+            key = str(c).lower()
+        if key not in seen:
+            seen.add(key)
+            uniq.append(c)
+
+    # Return the first that exists
+    for c in uniq:
+        if c.expanduser().exists():
+            return c.expanduser()
+
+    tried = "\n  - " + "\n  - ".join(str(c.expanduser()) for c in uniq)
+    raise FileNotFoundError(f"Excel file not found. Paths tried:{tried}")
+
+# ============================
+# Main
+# ============================
+xlsx_path_str = None
+
+# ============================
+# File chooser (click-to-choose)
+# ============================
+import os
+from typing import Optional
+
+EXCEL_EXTS = {".xlsx", ".xlsm", ".xlsb", ".xls"}
+
+def _first_existing(paths):
+    for p in paths:
+        try:
+            if p and Path(p).exists():
+                return str(Path(p))
+        except Exception:
+            pass
+    return None
+
+def _likely_initial_dirs() -> list[str]:
+    home = Path.home()
+    candidates = [
+        home / "Desktop",
+        # OneDrive Desktops (personal / org)
+        *[p for p in home.glob("OneDrive*/Desktop")],
+        home / "Downloads",
+        home / "Documents",
+        home,
+    ]
+    return [str(p) for p in candidates if p.exists()]
+
+def choose_excel_file() -> Optional[str]:
+    """
+    Open a native file dialog to choose an Excel file.
+    Returns the absolute path string or None if the user cancels.
+    """
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+
+        root = tk.Tk()
+        root.withdraw()
+        # Bring dialog to front on Windows
+        try:
+            root.call('wm', 'attributes', '.', '-topmost', True)
+        except Exception:
+            pass
+
+        # Pick a good initial directory
+        initialdir = _first_existing(_likely_initial_dirs())
+
+        path = filedialog.askopenfilename(
+            title="Select Excel file",
+            initialdir=initialdir or None,
+            filetypes=[
+                ("Excel files", "*.xlsx *.xlsm *.xlsb *.xls"),
+                ("All files", "*.*"),
+            ],
+        )
+        root.destroy()
+        if not path:
+            return None
+
+        sel = Path(path)
+        if sel.suffix.lower() not in EXCEL_EXTS:
+            # still allow if user picked a valid Excel (some environments hide extensions)
+            if sel.exists():
+                return str(sel.resolve())
+            return None
+        return str(sel.resolve())
+
+    except Exception:
+        # Headless or Tk not available -> no picker
+        return None
+
+
+# ============================
+# Main (picker-first workflow)
+# ============================
 
 if __name__ == "__main__":
     import sys
 
     try:
         print("=== Artera Upload Builder ===")
-        xlsx_path = input("📂 Enter the path to the Excel file: ").strip()
-        if not xlsx_path:
-            print("❌ No file path provided. Exiting.")
-            sys.exit(1)
+        # Always save to Desktop/Artera SFTP Uploads
+        desktop = Path.home() / "Desktop" / "Artera SFTP Uploads"
+        desktop.mkdir(parents=True, exist_ok=True)
+        outdir = str(desktop)
+        print(f"📁 Output will be saved to: {outdir}")
+
+        # 1) Try the click-to-choose dialog first
+        xlsx_path_str = choose_excel_file()
+
+        # 2) If the user cancels or picker isn’t available, fall back to manual entry
+        if not xlsx_path_str:
+            print("📎 File picker was unavailable or canceled.")
+            user_in = input("📂 Paste the full path to the Excel file (or press Enter to try again): ").strip()
+            if not user_in:
+                print("❌ No file selected.")
+                sys.exit(1)
+            # Reuse your robust resolver for typed paths
+            xlsx_path = _resolve_xlsx_path(user_in)
+        else:
+            xlsx_path = Path(xlsx_path_str)
+            if not xlsx_path.exists():
+                # Extremely rare, but handle just in case (network/redirect)
+                xlsx_path = _resolve_xlsx_path(xlsx_path_str)
 
         sheet = input("🗂️  Optional sheet name (press Enter to auto-detect): ").strip()
-        outdir = input("📁 Output directory for CSV (default='.') : ").strip() or "."
-        prefix = input("🏷️  File prefix (default='SBNC_Outreach') : ").strip() or "SBNC_Outreach"
 
-        # Optional language recode to standardize common variants
+        # Always save to Desktop/Artera SFTP Uploads
+        desktop = Path.home() / "Desktop" / "Artera SFTP Uploads"
+        desktop.mkdir(parents=True, exist_ok=True)
+        outdir = str(desktop)
+        print(f"📁 Output will be saved to: {outdir}")
+
+        prefix = input("🏷️  File prefix (default='SBNC_Outreach_') : ").strip() or "SBNC_Outreach_"
+
         language_recode = {"Spanish; Castilian": "Spanish"}
 
         result = build_artera_upload_from_excel(
@@ -310,6 +482,7 @@ if __name__ == "__main__":
             file_prefix=prefix,
             language_recode=language_recode,
         )
+
 
         print("\n✅ Upload CSV created successfully!")
         print(f"   Saved to: {result['csv_path']}")
