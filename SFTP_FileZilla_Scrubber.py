@@ -180,7 +180,7 @@ def build_artera_upload_from_excel(
     sheet_name: Optional[str] = None,
     extra_aliases: Optional[Dict[str, List[str]]] = None,
     language_recode: Optional[Dict[str, str]] = None,
-    csv_outdir: str | Path = ".",
+    csv_outdir: str | Path = Path.home() / "Desktop",  # <-- DEFAULT: Desktop
     file_prefix: str = "SBNC_Outreach",
     today: Optional[datetime] = None,
 ) -> Dict[str, object]:
@@ -277,7 +277,6 @@ def _resolve_xlsx_path(user_input: str) -> Path:
 
     # Fix common typo: "C:\Users\Desktop\..."
     if re.match(r"^[A-Za-z]:\\Users\\Desktop(\\|$)", raw):
-        # rewrite to <HOME>\Desktop\...
         tail = raw.split("\\Users\\Desktop\\", 1)[-1]
         raw = str(Path.home() / "Desktop" / tail)
 
@@ -367,7 +366,10 @@ if __name__ == "__main__":
         xlsx_path = _resolve_xlsx_path(user_in)
 
         sheet = input("🗂️  Optional sheet name (press Enter to auto-detect): ").strip()
-        outdir = input("📁 Output directory for CSV (default='.') : ").strip() or "."
+
+        default_outdir = Path.home() / "Desktop"  # <-- DEFAULT: Desktop
+        outdir = input(f"📁 Output directory for CSV (default='{default_outdir}') : ").strip() or default_outdir
+
         prefix = input("🏷️  File prefix (default='SBNC_Outreach') : ").strip() or "SBNC_Outreach"
 
         language_recode = {"Spanish; Castilian": "Spanish"}
