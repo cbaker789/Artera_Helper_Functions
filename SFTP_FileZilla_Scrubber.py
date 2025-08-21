@@ -12,12 +12,12 @@ import pandas as pd
 # ============================
 
 COLUMN_ALIASES: Dict[str, List[str]] = {
-    "full_name": ["name", "patient name", "member name", "full name"],
+    "full_name": ["name", "patient name", "member name", "full name","Pat Name" ],
     "first_name": ["first name", "given name", "patient first name", "first_name"],
     "last_name": ["last name", "surname", "family name", "patient last name", "last_name"],
-    "dob": ["dob", "date of birth", "birthdate", "birth date"],
-    "mrn": ["mrn", "person id", "patient id", "medical record number", "chart number", "member id","Member ID"],
-    "gender": ["sex at birth", "gender", "birth sex", "assigned sex at birth", "biological sex"],
+    "dob": ["dob", "date of birth", "birthdate", "birth date", "Birth Dt"],
+    "mrn": ["mrn", "person id", "patient id", "medical record number", "chart number", "member id","Member ID", "Md Rc"],
+    "gender": ["Sex","sex at birth", "gender", "birth sex", "assigned sex at birth", "biological sex"],
     "phone": ["phone", "cell", "cell phone", "mobile", "mobile phone", "primary phone", "person phone"],
     "email": ["email", "email address", "person email", "patient email"],
     "language": ["language", "preferred language", "person language", "primary language"],
